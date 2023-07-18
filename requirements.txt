@@ -1,0 +1,8 @@
+datasets==2.13.1
+huggingface_hub==0.16.4
+numpy==1.24.1
+pandas==2.0.3
+streamlit==1.24.1
+torch==2.0.1
+transformers==4.13.0
+translate_toolkit==3.9.2
