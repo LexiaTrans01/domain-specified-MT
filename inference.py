@@ -1,26 +1,27 @@
-import os
-import re
-import huggingface_hub
-import nltk
 import numpy as np
 import pandas as pd
-import sentencepiece
 import torch
 import transformers
-from datasets import Dataset, load_dataset, load_metric
-from tqdm import notebook
+import huggingface_hub
+from datasets import Dataset, load_metric
 from transformers import (AutoModelForSeq2SeqLM, AutoTokenizer,
-                          DataCollatorForSeq2Seq, MarianMTModel,
-                          MarianTokenizer, Seq2SeqTrainer,
+                          DataCollatorForSeq2Seq, Seq2SeqTrainer,
                           Seq2SeqTrainingArguments)
 from translate.storage.tmx import tmxfile
 
 TMX_FILE_NAME = 'Letters.tmx'
-FILE_NAME_CSV = 'letter.csv'
-model_checkpoint = "Helsinki-NLP/opus-mt-ru-en"
-metric = load_metric("sacrebleu")
+MODEL_CHEKPOINT = "Helsinki-NLP/opus-mt-ru-en"
+BATCH_SIZE = 16
+TRAIN_EPOCHS = 5
+MAX_INPUT_LENGTH = 128
+MAX_TARGET_LENGTH = 128
+SOURCE_LANG = "ru"
+TARGET_LANG = "en"
+MODEL_NAME = MODEL_CHEKPOINT.split("/")[-1]
+
 
 huggingface_hub.login()
+metric = load_metric("sacrebleu")
 
 with open(TMX_FILE_NAME, 'rb') as fin:
     tmx_file = tmxfile(fin, 'ru', 'en')
@@ -32,48 +33,37 @@ with open(TMX_FILE_NAME, 'rb') as fin:
 
 dataset = pd.DataFrame(data=(source,translation))
 dataset = dataset.transpose()
-dataset.columns =['ru','en']
-#dataset.to_csv(FILE_NAME_CSV,sep=';',index=None)
-
-#data_dict = dataset.to_dict(orient='list')
-#ds = Dataset.from_dict(data_dict)
-ds = load_dataset('csv', data_files=FILE_NAME_CSV,delimiter=';',split='train')
+dataset.columns = [SOURCE_LANG,TARGET_LANG]
+data_dict = dataset.to_dict(orient='list')
+ds = Dataset.from_dict(data_dict)
 ds = ds.train_test_split(test_size=0.2, shuffle=True)
-
-max_input_length = 128
-max_target_length = 128
-source_lang = "ru"
-target_lang = "en"
 
 def preprocess_function(examples):
     inputs = examples["ru"]
     targets = examples["en"]
-    model_inputs = tokenizer(inputs, max_length=max_input_length)
+    model_inputs = tokenizer(inputs, max_length=MAX_INPUT_LENGTH)
 
     with tokenizer.as_target_tokenizer():
-        labels = tokenizer(targets, max_length=max_target_length, truncation=True)
+        labels = tokenizer(targets, max_length=MAX_TARGET_LENGTH, truncation=True)
 
     model_inputs["labels"] = labels["input_ids"]
     return model_inputs
 
-tokenizer = AutoTokenizer.from_pretrained(model_checkpoint)
-model = AutoModelForSeq2SeqLM.from_pretrained(model_checkpoint)
+tokenizer = AutoTokenizer.from_pretrained(MODEL_CHEKPOINT)
+model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_CHEKPOINT)
 
 tokenized_datasets = ds.map(preprocess_function,batched=True)
 
-batch_size = 16
-model_name = model_checkpoint.split("/")[-1]
 args = Seq2SeqTrainingArguments(
-    f"{model_name}-finetuned-{source_lang}-to-{target_lang}-lett",
+    f"{MODEL_NAME}-finetuned-{SOURCE_LANG}-to-{TARGET_LANG}-letter",
     evaluation_strategy = "epoch",
-    learning_rate=1e-3,
-    per_device_train_batch_size=batch_size,
-    per_device_eval_batch_size=batch_size,
+    learning_rate=4e-5,
+    per_device_train_batch_size=BATCH_SIZE,
+    per_device_eval_batch_size=BATCH_SIZE,
     weight_decay=0.01,
-    save_total_limit=3,
-    num_train_epochs=20,
+    save_total_limit=10,
+    num_train_epochs=TRAIN_EPOCHS,
     predict_with_generate=True,
-    report_to='wandb',
     push_to_hub=True
 )
 data_collator = DataCollatorForSeq2Seq(tokenizer, model=model)
@@ -119,6 +109,5 @@ trainer = Seq2SeqTrainer(
 
 old_collator = trainer.data_collator
 trainer.data_collator = lambda data: dict(old_collator(data))
-
 trainer.train()
 trainer.save_model('letter')
